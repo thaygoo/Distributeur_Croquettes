@@ -1,0 +1,175 @@
+substitutions:
+  name: distributeur
+  friendly_name: "Distributeur Croquettes"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+  project:
+    name: esphome.web
+    version: '1.0'
+
+esp8266:
+  board: d1_mini
+
+logger:
+api:
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: "***************"
+  password: "*************"
+  use_address: *************
+  min_auth_mode: WPA2
+  ap:
+    ssid: "Distributeur Fallback"
+    password: "**********"
+
+web_server:
+  port: ***
+
+globals:
+  - id: feeding_duration
+    type: float
+    restore_value: yes
+    initial_value: '120.0'
+  - id: mode_auto
+    type: boolean
+    restore_value: no
+    initial_value: 'true'
+  - id: heure_1
+    type: int
+    restore_value: yes
+    initial_value: '8'
+  - id: min_1
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: heure_2
+    type: int
+    restore_value: yes
+    initial_value: '18'
+  - id: min_2
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+sensor:
+  - platform: homeassistant
+    id: ha_h1
+    entity_id: input_datetime.repas_1
+    attribute: hour
+    on_value:
+      then:
+        - globals.set: { id: heure_1, value: !lambda 'return x;' }
+  - platform: homeassistant
+    id: ha_m1
+    entity_id: input_datetime.repas_1
+    attribute: minute
+    on_value:
+      then:
+        - globals.set: { id: min_1, value: !lambda 'return x;' }
+  - platform: homeassistant
+    id: ha_h2
+    entity_id: input_datetime.repas_2
+    attribute: hour
+    on_value:
+      then:
+        - globals.set: { id: heure_2, value: !lambda 'return x;' }
+  - platform: homeassistant
+    id: ha_m2
+    entity_id: input_datetime.repas_2
+    attribute: minute
+    on_value:
+      then:
+        - globals.set: { id: min_2, value: !lambda 'return x;' }
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Europe/Brussels"
+    servers:
+      - 0.pool.ntp.org
+    on_time:
+      - seconds: 0
+        minutes: '*'
+        hours: '*'
+        then:
+          - if:
+              condition:
+                lambda: |-
+                  auto t = id(sntp_time).now();
+                  bool repas1 = (t.hour == id(heure_1) && t.minute == id(min_1));
+                  bool repas2 = (t.hour == id(heure_2) && t.minute == id(min_2));
+                  return (repas1 || repas2) && id(mode_auto);
+              then:
+                - script.execute: dispense_food
+
+output:
+  - platform: gpio
+    pin: D1
+    id: motor_mosfet
+    inverted: false
+
+script:
+  - id: dispense_food
+    mode: single
+    then:
+      - logger.log: "Début de la distribution..."
+      - output.turn_on: motor_mosfet
+      - delay: !lambda "return id(feeding_duration) * 1000;"
+      - output.turn_off: motor_mosfet
+      - logger.log: "Fin de la distribution."
+
+number:
+  - platform: template
+    name: "Durée de distribution"
+    id: duration_slider
+    icon: "mdi:timer-sand"
+    unit_of_measurement: "s"
+    min_value: 0.0
+    max_value: 240.0
+    step: 5.0
+    optimistic: true
+    initial_value: 120.0
+    set_action:
+      - globals.set:
+          id: feeding_duration
+          value: !lambda 'return x;'
+
+button:
+  - platform: template
+    name: "Distribuer maintenant"
+    icon: "mdi:food-drumstick"
+    on_press:
+      - script.execute: dispense_food
+
+switch:
+  - platform: template
+    name: "Mode Automatique"
+    icon: "mdi:robot"
+    id: switch_mode_auto
+    lambda: "return id(mode_auto);"
+    turn_on_action:
+      - globals.set:
+          id: mode_auto
+          value: 'true'
+    turn_off_action:
+      - globals.set:
+          id: mode_auto
+          value: 'false'
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: D2
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Bouton Physique"
+    filters:
+      - delayed_on: 50ms
+    on_press:
+      - logger.log: "Appui physique détecté"
+      - script.execute: dispense_food
